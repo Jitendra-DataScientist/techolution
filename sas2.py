@@ -1,14 +1,28 @@
 """
-    a) This script contains code for one of Techolution's assignments.
-    b) This script is tested, and in that could be said to be better than sas2.py.
+   a) This script is has not been tested by me (for that reson I would rely more on sas1.py), but this script should work fine mostly.
+   b) This script contains code for one of Techolution's assignments.
+   c) This script is similar to sas1.py except:
+        1. Removed Redundant Retry Logic
+            > The original code had a retry mechanism (while retries < MAX_RETRIES), but in practice, the feedback improvement process should be a single step unless explicitly designed for iterative refinement.
+            > If the response requires further clarification, the user should provide additional input naturally, rather than looping within the same function.
+
+        2. Streamlined Code Flow
+            > The original implementation separated cases for improved solutions, clarifications, and invalid responses within a loop.
+            > The new version assumes that the model’s response will be directly useful, and if further clarification is needed, it can be handled naturally by re-submitting feedback.
+
+        3. Ensured Feedback is Stored Consistently
+            > The conversation_history.append((query, response, feedback)) is called immediately after receiving feedback, ensuring that all interactions are logged properly.
+
+        4. Directly Processes the Feedback
+            > Instead of checking conditions and looping, the function now directly improves the response and displays it, making the interaction smoother.
 """
 import openai
 import re
 import subprocess
 import tempfile
 import os
-import ast
 import logging
+import ast
 from dotenv import load_dotenv
 
 # Determine the directory for logs
@@ -37,7 +51,6 @@ logger.addHandler(file_handler)
 # Load environment variables from a .env file
 load_dotenv()
 
-
 class IntelligentCodingAgent:
     def __init__(self, api_key):
         """
@@ -53,7 +66,6 @@ class IntelligentCodingAgent:
             "allowed_functions": set(),  # Allowed functions (can be expanded as needed)
             "time_limit": 5  # Execution timeout in seconds
         }
-
 
     def _generate_response(self, prompt, max_tokens=1500):
         """
@@ -77,7 +89,6 @@ class IntelligentCodingAgent:
             temperature=0.3  # Lower temperature for more deterministic responses
         )
         return response.choices[0].message.content
-
 
     def _system_prompt(self):
         """
@@ -104,10 +115,10 @@ class IntelligentCodingAgent:
                     [CODE]
                     ```python
                     <code>
+                    ```
                     [EXPLANATION]
                     <detailed explanation>
             """
-
 
     def _validate_code_safety(self, code):
         """
@@ -127,12 +138,11 @@ class IntelligentCodingAgent:
                         if name.name.split('.')[0] in self.safety_checks["banned_imports"]:
                             return False
                 elif isinstance(node, ast.ImportFrom):
-                    if node.module.split('.')[0] in self.safety_checks["banned_imports"]:
+                    if node.module and node.module.split('.')[0] in self.safety_checks["banned_imports"]:
                         return False
             return True  # Code passes validation
         except:
             return False  # If parsing fails, assume the code is unsafe
-
 
     def _execute_safely(self, code):
         """
@@ -164,7 +174,6 @@ class IntelligentCodingAgent:
         finally:
             os.remove(filename)  # Ensure cleanup after execution
 
-
     def process_query(self, query):
         """
         Processes a user query to generate and execute Python code.
@@ -187,89 +196,46 @@ class IntelligentCodingAgent:
             code = re.search(r'```python(.*?)```', code_match.group(1), re.DOTALL)
             if code:
                 code = code.group(1).strip()
-                if self._validate_code_safety(code):
-                    execution_result = self._execute_safely(code)
-                else:
-                    execution_result = "Code blocked due to security restrictions"
+                execution_result = self._execute_safely(code) if self._validate_code_safety(code) else "Code blocked due to security restrictions"
             else:
-                code = "Invalid code format"
-                execution_result = ""
+                code, execution_result = "Invalid code format", ""
         else:
-            code = "No code generated"
-            execution_result = ""
+            code, execution_result = "No code generated", ""
 
-        return {
-            "type": "solution",
-            "code": code,
-            "explanation": explanation,
-            "execution_result": execution_result
-        }
-
+        return {"type": "solution", "code": code, "explanation": explanation, "execution_result": execution_result}
 
     def interactive_loop(self):
         """
         Interactive loop for user input and code generation.
         """
-        MAX_RETRIES = 3  # Maximum attempts to get valid code
-        
+        MAX_RETRIES = 3
         while True:
             query = input("\nEnter your coding task (or 'quit' to exit): ")
             if query.lower() == 'quit':
                 break
-            
             response = self.process_query(query)
             
-            # Handle initial clarification
             if response["type"] == "clarification":
                 print(f"\nClarification needed: {response['content']}")
-                clarification = input("Your clarification: ")
-                query += f"\nUser clarification: {clarification}"
+                query += f"\nUser clarification: {input('Your clarification: ')}"
                 response = self.process_query(query)
             
-            # Process initial solution
             if response["type"] == "solution":
                 self._display_response(response)
                 feedback = input("\nProvide feedback (or press enter to continue): ")
-                
                 if feedback:
-                    retries = 0
-                    while retries < MAX_RETRIES:
-                        self.conversation_history.append((query, response, feedback))
-                        print("Feedback received. Improving solution...")
-                        improved_response = self.process_query(f"{query}\nUser feedback: {feedback}")
-                        
-                        # Handle improved solution
-                        if improved_response["type"] == "solution":
-                            self._display_response(improved_response, prefix="IMPROVED")
-                            break
-                        
-                        # Handle follow-up clarification
-                        elif improved_response["type"] == "clarification":
-                            print(f"\nClarification needed: {improved_response['content']}")
-                            clarification = input("Your clarification: ")
-                            feedback += f"\nUser clarification: {clarification}"
-                            retries += 1
-                        
-                        # Handle invalid response format
-                        else:
-                            print("Unexpected response format. Please try again.")
-                            retries += 1
-                    
-                    if retries >= MAX_RETRIES:
-                        print("Maximum retry attempts reached. Please refine your query.")
-
+                    self.conversation_history.append((query, response, feedback))
+                    print("Feedback received. Improving solution...")
+                    response = self.process_query(f"{query}\nUser feedback: {feedback}")
+                    self._display_response(response, "IMPROVED")
 
     def _display_response(self, response, prefix="GENERATED"):
         """
         Displays the generated code, explanation, and execution result.
         """
-        print(f"\n=== {prefix} CODE ===")
-        print(response.get("code", "No code generated"))
-        print(f"\n=== {prefix} EXPLANATION ===")
-        print(response.get("explanation", "No explanation available"))
-        print("\n=== EXECUTION RESULT ===")
-        print(response.get("execution_result", "No execution result available"))
-
+        print(f"\n=== {prefix} CODE ===\n{response.get('code', 'No code generated')}")
+        print(f"\n=== {prefix} EXPLANATION ===\n{response.get('explanation', 'No explanation available')}")
+        print(f"\n=== EXECUTION RESULT ===\n{response.get('execution_result', 'No execution result available')}")
 
 if __name__ == "__main__":
     api_key = os.getenv("OPENAI_API_KEY")
